@@ -1,18 +1,28 @@
 use crate::{
     compilation::{compile_validators, context::CompilationContext},
     error::{error, no_error, ErrorIterator, ValidationError},
+    keywords,
     keywords::CompilationResult,
     output::BasicOutput,
     paths::{InstancePath, JSONPointer},
     primitive_type::PrimitiveType,
+    resolver::Resolver,
     schema_node::SchemaNode,
+    schemas::{id_of, Draft},
     validator::{format_iter_of_validators, PartialApplication, Validate},
+    CompilationOptions,
 };
 use serde_json::{Map, Value};
+use std::sync::Arc;
+use url::Url;
 
 pub(crate) struct OneOfValidator {
     schemas: Vec<SchemaNode>,
     schema_path: JSONPointer,
+    resolver: Arc<Resolver>,
+    config: Arc<CompilationOptions>,
+    draft: Draft,
+    url: Url,
 }
 
 impl OneOfValidator {
@@ -29,9 +39,20 @@ impl OneOfValidator {
                 let node = compile_validators(item, &item_context)?;
                 schemas.push(node)
             }
+            let draft = context.config.draft();
+            let config = Arc::clone(&context.config);
+            let url = context.build_url("#/discriminator").unwrap();
+
+
+
+
             Ok(Box::new(OneOfValidator {
                 schemas,
                 schema_path: keyword_context.into_pointer(),
+                resolver: Arc::clone(&context.resolver),
+                draft,
+                url,
+                config,
             }))
         } else {
             Err(ValidationError::single_type_error(
@@ -41,6 +62,44 @@ impl OneOfValidator {
                 PrimitiveType::Array,
             ))
         }
+    }
+
+    fn get_discriminated_valid<'instance>(
+        &self,
+        instance: &'instance Value,
+        instance_path: &InstancePath,
+    ) -> Option<ErrorIterator<'instance>> {
+        if let Ok((url, discriminator)) =
+            &self
+                .resolver
+                .resolve_fragment(self.draft, &self.url, "#/discriminator")
+        {
+            println!("found the discriminator key");
+            println!("{:?}", discriminator.get("propertyName"));
+            if let Some(propertyName) = discriminator.get("propertyName") {
+                if let Some(schemaName) = instance.get(propertyName.as_str()?) {
+                    println!("resource type {:?}", schemaName);
+                    if let Some(mapping) = discriminator.get("mapping") {
+                        let schemaRef = mapping.get(schemaName.as_str()?)?;
+                        println!("schema url {:?}", schemaRef);
+
+                        let context = CompilationContext::new(
+                            url.into(),
+                            Arc::clone(&self.config),
+                            Arc::clone(&self.resolver),
+                        );
+                            let validator = keywords::ref_::compile(discriminator.as_object()?, schemaRef, &context)
+                                .expect("should always return Some").ok()?;
+
+                            let result = validator.validate(instance, instance_path);
+                            println!("got here");
+                            //     *self.sub_nodes.write() = Some(node);
+                            return Some(result);
+                    }
+                }
+            }
+        }
+        None
     }
 
     fn get_first_valid(&self, instance: &Value) -> Option<usize> {
@@ -76,6 +135,10 @@ impl Validate for OneOfValidator {
         instance: &'instance Value,
         instance_path: &InstancePath,
     ) -> ErrorIterator<'instance> {
+        if let Some(discriminatorValidation) = self.get_discriminated_valid(instance, instance_path)
+        {
+            return discriminatorValidation;
+        }
         let first_valid_idx = self.get_first_valid(instance);
         if let Some(idx) = first_valid_idx {
             if self.are_others_valid(instance, idx) {
