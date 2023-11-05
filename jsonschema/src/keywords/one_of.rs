@@ -15,14 +15,14 @@ use crate::{
 use serde_json::{Map, Value};
 use std::sync::Arc;
 use url::Url;
+use std::collections::HashMap;
 
 pub(crate) struct OneOfValidator {
     schemas: Vec<SchemaNode>,
     schema_path: JSONPointer,
-    resolver: Arc<Resolver>,
-    config: Arc<CompilationOptions>,
-    draft: Draft,
-    url: Url,
+    discriminatedSchemas: HashMap<String, usize>,
+    discriminatedMapping: HashMap<String, String>,
+    discriminatorPropertyName: Option<String>,
 }
 
 impl OneOfValidator {
@@ -32,27 +32,43 @@ impl OneOfValidator {
         context: &CompilationContext,
     ) -> CompilationResult<'a> {
         if let Value::Array(items) = schema {
+            let draft = context.config.draft();
+            let config = Arc::clone(&context.config);
+            let url = context.build_url("#/discriminator").unwrap();
+            let mut discriminatorPropertyName: Option<String> = None;
+            let mut discriminatedSchemas = HashMap::new();
+            let mut discriminatedMapping: HashMap<String, String> = HashMap::new();
+            if let Ok((url, discriminator)) =
+                &context
+                    .resolver
+                    .resolve_fragment(draft, &url, "#/discriminator")
+            {
+                if let Some(propertyName) = discriminator.get("propertyName") {
+                    discriminatorPropertyName = Some(propertyName.as_str().expect("learn to handle this").to_string());
+                }
+                if let Some(mapping) = discriminator.get("mapping").expect("test").as_object() {
+                    discriminatedMapping = mapping.iter().map(|(k, v)| (k.clone(), v.as_str().expect("ok").to_string())).collect();
+                }
+            }
             let keyword_context = context.with_path("oneOf");
             let mut schemas = Vec::with_capacity(items.len());
             for (idx, item) in items.iter().enumerate() {
                 let item_context = keyword_context.with_path(idx);
                 let node = compile_validators(item, &item_context)?;
-                schemas.push(node)
+                schemas.push(node);
+                if discriminatorPropertyName.is_some() {
+                    if let Some(schemaRef) = item.get("$ref") {
+                        discriminatedSchemas.insert(schemaRef.as_str().expect("bah").to_string(), idx);
+                    }
+                }
             }
-            let draft = context.config.draft();
-            let config = Arc::clone(&context.config);
-            let url = context.build_url("#/discriminator").unwrap();
-
-
-
 
             Ok(Box::new(OneOfValidator {
                 schemas,
                 schema_path: keyword_context.into_pointer(),
-                resolver: Arc::clone(&context.resolver),
-                draft,
-                url,
-                config,
+                discriminatedSchemas,
+                discriminatedMapping,
+                discriminatorPropertyName,
             }))
         } else {
             Err(ValidationError::single_type_error(
@@ -69,34 +85,15 @@ impl OneOfValidator {
         instance: &'instance Value,
         instance_path: &InstancePath,
     ) -> Option<ErrorIterator<'instance>> {
-        if let Ok((url, discriminator)) =
-            &self
-                .resolver
-                .resolve_fragment(self.draft, &self.url, "#/discriminator")
-        {
-            println!("found the discriminator key");
-            println!("{:?}", discriminator.get("propertyName"));
-            if let Some(propertyName) = discriminator.get("propertyName") {
-                if let Some(schemaName) = instance.get(propertyName.as_str()?) {
-                    println!("resource type {:?}", schemaName);
-                    if let Some(mapping) = discriminator.get("mapping") {
-                        let schemaRef = mapping.get(schemaName.as_str()?)?;
-                        println!("schema url {:?}", schemaRef);
-
-                        let context = CompilationContext::new(
-                            url.into(),
-                            Arc::clone(&self.config),
-                            Arc::clone(&self.resolver),
-                        );
-                            let validator = keywords::ref_::compile(discriminator.as_object()?, schemaRef, &context)
-                                .expect("should always return Some").ok()?;
-
-                            let result = validator.validate(instance, instance_path);
-                            println!("got here");
-                            //     *self.sub_nodes.write() = Some(node);
-                            return Some(result);
-                    }
-                }
+        if let Some(propName) = &self.discriminatorPropertyName {
+            if let Some(schemaName) = instance.get(propName) {
+                println!("resource type {:?}", schemaName);
+                let schemaRef = self.discriminatedMapping.get(schemaName.as_str()?)?;
+                println!("schema url {:?}", schemaRef);
+                let node_idx = self.discriminatedSchemas.get(schemaRef)?;
+                let node = &self.schemas[*node_idx];
+                //return node.err_iter(instance, instance_path);
+                return Some(node.validate(instance, instance_path));
             }
         }
         None
