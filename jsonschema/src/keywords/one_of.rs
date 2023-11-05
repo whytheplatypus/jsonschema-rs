@@ -1,28 +1,23 @@
 use crate::{
     compilation::{compile_validators, context::CompilationContext},
     error::{error, no_error, ErrorIterator, ValidationError},
-    keywords,
     keywords::CompilationResult,
     output::BasicOutput,
     paths::{InstancePath, JSONPointer},
     primitive_type::PrimitiveType,
-    resolver::Resolver,
     schema_node::SchemaNode,
-    schemas::{id_of, Draft},
     validator::{format_iter_of_validators, PartialApplication, Validate},
-    CompilationOptions,
 };
 use serde_json::{Map, Value};
-use std::sync::Arc;
-use url::Url;
 use std::collections::HashMap;
+
 
 pub(crate) struct OneOfValidator {
     schemas: Vec<SchemaNode>,
     schema_path: JSONPointer,
-    discriminatedSchemas: HashMap<String, usize>,
-    discriminatedMapping: HashMap<String, String>,
-    discriminatorPropertyName: Option<String>,
+    discriminated_schemas: HashMap<String, usize>,
+    discriminated_mapping: HashMap<String, String>,
+    discriminator_property_name: Option<String>,
 }
 
 impl OneOfValidator {
@@ -33,21 +28,28 @@ impl OneOfValidator {
     ) -> CompilationResult<'a> {
         if let Value::Array(items) = schema {
             let draft = context.config.draft();
-            let config = Arc::clone(&context.config);
             let url = context.build_url("#/discriminator").unwrap();
-            let mut discriminatorPropertyName: Option<String> = None;
-            let mut discriminatedSchemas = HashMap::new();
-            let mut discriminatedMapping: HashMap<String, String> = HashMap::new();
-            if let Ok((url, discriminator)) =
+            let mut discriminator_property_name: Option<String> = None;
+            let mut discriminated_schemas = HashMap::new();
+            let mut discriminated_mapping: HashMap<String, String> = HashMap::new();
+            if let Ok((_, discriminator)) =
                 &context
                     .resolver
                     .resolve_fragment(draft, &url, "#/discriminator")
             {
-                if let Some(propertyName) = discriminator.get("propertyName") {
-                    discriminatorPropertyName = Some(propertyName.as_str().expect("learn to handle this").to_string());
+                if let Some(property_name) = discriminator.get("propertyName") {
+                    discriminator_property_name = Some(
+                        property_name
+                            .as_str()
+                            .expect("learn to handle this")
+                            .to_string(),
+                    );
                 }
                 if let Some(mapping) = discriminator.get("mapping").expect("test").as_object() {
-                    discriminatedMapping = mapping.iter().map(|(k, v)| (k.clone(), v.as_str().expect("ok").to_string())).collect();
+                    discriminated_mapping = mapping
+                        .iter()
+                        .map(|(k, v)| (k.clone(), v.as_str().expect("ok").to_string()))
+                        .collect();
                 }
             }
             let keyword_context = context.with_path("oneOf");
@@ -56,9 +58,10 @@ impl OneOfValidator {
                 let item_context = keyword_context.with_path(idx);
                 let node = compile_validators(item, &item_context)?;
                 schemas.push(node);
-                if discriminatorPropertyName.is_some() {
-                    if let Some(schemaRef) = item.get("$ref") {
-                        discriminatedSchemas.insert(schemaRef.as_str().expect("bah").to_string(), idx);
+                if discriminator_property_name.is_some() {
+                    if let Some(schema_ref) = item.get("$ref") {
+                        discriminated_schemas
+                            .insert(schema_ref.as_str().expect("bah").to_string(), idx);
                     }
                 }
             }
@@ -66,9 +69,9 @@ impl OneOfValidator {
             Ok(Box::new(OneOfValidator {
                 schemas,
                 schema_path: keyword_context.into_pointer(),
-                discriminatedSchemas,
-                discriminatedMapping,
-                discriminatorPropertyName,
+                discriminated_schemas,
+                discriminated_mapping,
+                discriminator_property_name,
             }))
         } else {
             Err(ValidationError::single_type_error(
@@ -85,12 +88,12 @@ impl OneOfValidator {
         instance: &'instance Value,
         instance_path: &InstancePath,
     ) -> Option<ErrorIterator<'instance>> {
-        if let Some(propName) = &self.discriminatorPropertyName {
-            if let Some(schemaName) = instance.get(propName) {
-                println!("resource type {:?}", schemaName);
-                let schemaRef = self.discriminatedMapping.get(schemaName.as_str()?)?;
-                println!("schema url {:?}", schemaRef);
-                let node_idx = self.discriminatedSchemas.get(schemaRef)?;
+        if let Some(prop_name) = &self.discriminator_property_name {
+            if let Some(schema_name) = instance.get(prop_name) {
+                println!("resource type {:?}", schema_name);
+                let schema_ref = self.discriminated_mapping.get(schema_name.as_str()?)?;
+                println!("schema url {:?}", schema_ref);
+                let node_idx = self.discriminated_schemas.get(schema_ref)?;
                 let node = &self.schemas[*node_idx];
                 //return node.err_iter(instance, instance_path);
                 return Some(node.validate(instance, instance_path));
@@ -132,9 +135,9 @@ impl Validate for OneOfValidator {
         instance: &'instance Value,
         instance_path: &InstancePath,
     ) -> ErrorIterator<'instance> {
-        if let Some(discriminatorValidation) = self.get_discriminated_valid(instance, instance_path)
+        if let Some(discriminator_validation) = self.get_discriminated_valid(instance, instance_path)
         {
-            return discriminatorValidation;
+            return discriminator_validation;
         }
         let first_valid_idx = self.get_first_valid(instance);
         if let Some(idx) = first_valid_idx {
