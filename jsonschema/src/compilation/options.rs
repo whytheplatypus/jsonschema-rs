@@ -275,6 +275,7 @@ pub struct CompilationOptions {
     validate_formats: Option<bool>,
     validate_schema: bool,
     ignore_unknown_formats: bool,
+    discriminator: Option<schemas::Discriminator>,
 }
 
 impl Default for CompilationOptions {
@@ -289,6 +290,7 @@ impl Default for CompilationOptions {
             formats: AHashMap::default(),
             validate_formats: None,
             ignore_unknown_formats: true,
+            discriminator: None,
         }
     }
 }
@@ -296,6 +298,10 @@ impl Default for CompilationOptions {
 impl CompilationOptions {
     pub(crate) fn draft(&self) -> schemas::Draft {
         self.draft.unwrap_or_default()
+    }
+
+    pub(crate) fn discriminator(&self) -> &Option<schemas::Discriminator> {
+        &self.discriminator
     }
 
     /// Compile `schema` into `JSONSchema` using the currently defined options.
@@ -318,6 +324,11 @@ impl CompilationOptions {
         if self.draft.is_none() {
             if let Some(draft) = schemas::draft_from_schema(schema) {
                 config.with_draft(draft);
+            }
+        }
+        if self.discriminator.is_none() {
+            if let Some(discriminator) = schemas::discriminator_from_schema(schema) {
+                config.with_discriminator(discriminator);
             }
         }
         let config = Arc::new(config);
@@ -366,6 +377,13 @@ impl CompilationOptions {
         self.draft = Some(draft);
         self
     }
+
+    pub fn with_discriminator(&mut self, discriminator: schemas::Discriminator) -> &mut Self {
+        self.discriminator = Some(discriminator);
+        self
+    }
+
+
 
     pub(crate) fn content_media_type_check(
         &self,

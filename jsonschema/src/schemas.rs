@@ -1,5 +1,6 @@
 use crate::{compilation::context::CompilationContext, keywords};
 use serde_json::{Map, Value};
+use ahash::AHashMap;
 
 /// JSON Schema Draft version
 #[non_exhaustive]
@@ -203,6 +204,33 @@ pub(crate) fn draft_from_schema(schema: &Value) -> Option<Draft> {
         .get("$schema")
         .and_then(Value::as_str)
         .and_then(draft_from_url)
+}
+
+#[derive(Debug, Clone)]
+pub struct Discriminator {
+    pub property_name: String,
+    pub mapping: AHashMap<String, String>,
+}
+
+pub(crate) fn discriminator_from_schema(schema: &Value) -> Option<Discriminator> {
+    schema
+        .get("discriminator")
+        .and_then(Value::as_object)
+        .and_then(discriminator_from_object)
+}
+
+pub(crate) fn discriminator_from_object(object: &Map<String, Value>) -> Option<Discriminator> {
+    let property_name = object.get("propertyName")?.as_str()?.to_string();
+    let mapping = object
+        .get("mapping")?
+        .as_object()?
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.as_str().expect("fda").to_string()))
+        .collect();
+    Some(Discriminator {
+        property_name,
+        mapping,
+    })
 }
 
 #[inline]
