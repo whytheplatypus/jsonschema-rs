@@ -10,8 +10,6 @@ use crate::{
     validator::{format_iter_of_validators, PartialApplication, Validate},
 };
 use serde_json::{Map, Value};
-use std::sync::Arc;
-use url::Url;
 
 pub(crate) struct OneOfValidator {
     schemas: Vec<SchemaNode>,
@@ -34,26 +32,9 @@ impl OneOfValidator {
                 schemas.push(node)
             }
 
-            let resolver = Arc::clone(&context.resolver);
-            // shouldn't exit on error, it just means a discriminator isn't present
-            let (_, discriminator_node) = match resolver.resolve_fragment(
-                context.config.draft().clone(),
-                &Url::parse("json-schema:///#/discriminator")?,
-                "#/discriminator",
-            ) {
-                Ok(node) => node,
-                Err(_) => {
-                    return Err(ValidationError::single_type_error(
-                        JSONPointer::default(),
-                        context.clone().into_pointer(),
-                        schema,
-                        PrimitiveType::Array,
-                    ))
-                }
-            };
             // could be way more generic
             let discriminator = if let Some(compilation_result) =
-                discriminator::compile(&Map::new(), &discriminator_node, &context)
+                discriminator::compile(&Map::new(), &schema, &context)
             {
                 match compilation_result {
                     Ok(d) => Some(d),

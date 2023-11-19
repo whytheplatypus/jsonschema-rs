@@ -10,6 +10,8 @@ use crate::{
 };
 use serde_json::{Map, Value};
 use std::collections::HashMap;
+use std::sync::Arc;
+use url::Url;
 
 pub(crate) struct DiscriminatorValidator {
     schema_path: JSONPointer,
@@ -38,14 +40,12 @@ fn compile_mapping<'a>(
             let validators = vec![("$ref".to_string(), validator)];
             Ok(SchemaNode::new_from_keywords(&context, validators, None))
         }
-        _ => {
-            Err(ValidationError::single_type_error(
-                JSONPointer::default(),
-                context.clone().into_pointer(),
-                schema,
-                PrimitiveType::Array,
-            ))
-        }
+        _ => Err(ValidationError::single_type_error(
+            JSONPointer::default(),
+            context.clone().into_pointer(),
+            schema,
+            PrimitiveType::Array,
+        )),
     }
 }
 
@@ -147,5 +147,30 @@ pub(crate) fn compile<'a>(
     schema: &'a Value,
     context: &CompilationContext,
 ) -> Option<CompilationResult<'a>> {
-    Some(DiscriminatorValidator::compile(schema, context))
+    let resolver = Arc::clone(&context.resolver);
+    // shouldn't exit on error, it just means a discriminator isn't present
+    let discriminator_schema = match resolver.resolve_fragment(
+        context.config.draft().clone(),
+        &Url::parse("json-schema:///#/discriminator").expect("valid url"),
+        "#/discriminator",
+    ) {
+        Ok((_, node)) => node,
+        Err(_) => {
+            return Some(Err(ValidationError::single_type_error(
+                JSONPointer::default(),
+                context.clone().into_pointer(),
+                schema,
+                PrimitiveType::Array,
+            )))
+        }
+    };
+    match DiscriminatorValidator::compile(&discriminator_schema, context) {
+        Ok(validator) => Some(Ok(validator)),
+        Err(e) => Some(Err(ValidationError::single_type_error(
+            JSONPointer::default(),
+            context.clone().into_pointer(),
+            schema,
+            PrimitiveType::Array,
+        ))),
+    }
 }
