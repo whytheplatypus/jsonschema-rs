@@ -1,21 +1,25 @@
 use crate::{
     compilation::{compile_validators, context::CompilationContext},
     error::{error, no_error, ErrorIterator, ValidationError},
+    keywords::discriminator,
+    keywords::discriminator::DiscriminatorValidator,
     keywords::CompilationResult,
     output::BasicOutput,
     paths::{InstancePath, JSONPointer},
     primitive_type::PrimitiveType,
+    resolver::Resolver,
     schema_node::SchemaNode,
     validator::{format_iter_of_validators, PartialApplication, Validate},
-    schemas::Discriminator,
 };
 use serde_json::{Map, Value};
 use std::collections::HashMap;
+use std::sync::Arc;
+use url::Url;
 
 pub(crate) struct OneOfValidator {
-    schemas: HashMap<String, SchemaNode>,
+    schemas: Vec<SchemaNode>,
     schema_path: JSONPointer,
-    discriminator: Option<Discriminator>,
+    discriminator: Option<Box<dyn Validate + Send + Sync>>,
 }
 
 impl OneOfValidator {
@@ -26,17 +30,46 @@ impl OneOfValidator {
     ) -> CompilationResult<'a> {
         if let Value::Array(items) = schema {
             let keyword_context = context.with_path("oneOf");
-            let mut schemas = HashMap::new();
+            let mut schemas = Vec::with_capacity(items.len());
             for (idx, item) in items.iter().enumerate() {
                 let item_context = keyword_context.with_path(idx);
                 let node = compile_validators(item, &item_context)?;
-                schemas.insert(item.get("$ref").expect("fdsa").as_str().expect("fda").to_string(), node);
+                schemas.push(node);
             }
+
+            let resolver = Arc::clone(&context.resolver);
+            // shouldn't exit on error, it just means a discriminator isn't present
+            let (_, discriminator_node) = match resolver.resolve_fragment(
+                context.config.draft().clone(),
+                &Url::parse("json-schema:///#/discriminator")?,
+                "#/discriminator",
+            ) {
+                Ok(node) => node,
+                Err(_) => {
+                    return Err(ValidationError::single_type_error(
+                        JSONPointer::default(),
+                        context.clone().into_pointer(),
+                        schema,
+                        PrimitiveType::Array,
+                    ))
+                }
+            };
+            // could be way more generic
+            let discriminator = if let Some(compilationResult) =
+                discriminator::compile(&Map::new(), &discriminator_node, &context)
+            {
+                match compilationResult {
+                    Ok(d) => Some(d),
+                    Err(e) => None,
+                }
+            } else {
+                None
+            };
 
             Ok(Box::new(OneOfValidator {
                 schemas,
                 schema_path: keyword_context.into_pointer(),
-                discriminator: context.config.discriminator().clone(),
+                discriminator,
             }))
         } else {
             Err(ValidationError::single_type_error(
@@ -48,25 +81,9 @@ impl OneOfValidator {
         }
     }
 
-    fn get_discriminated_valid<'instance>(
-        &self,
-        instance: &'instance Value,
-        instance_path: &InstancePath,
-    ) -> Option<ErrorIterator<'instance>> {
-        if let Some(discriminator) = &self.discriminator {
-            if let Some(schema_name) = instance.get(&discriminator.property_name) {
-                let schema_ref = discriminator.mapping.get(schema_name.as_str()?)?;
-                let node = self.schemas.get(schema_ref)?;
-                //return node.err_iter(instance, instance_path);
-                return Some(node.validate(instance, instance_path));
-            }
-        }
-        None
-    }
-
-    fn get_first_valid(&self, instance: &Value) -> Option<&String> {
+    fn get_first_valid(&self, instance: &Value) -> Option<usize> {
         let mut first_valid_idx = None;
-        for (idx, node) in &self.schemas {
+        for (idx, node) in self.schemas.iter().enumerate() {
             if node.is_valid(instance) {
                 first_valid_idx = Some(idx);
                 break;
@@ -76,19 +93,14 @@ impl OneOfValidator {
     }
 
     #[allow(clippy::integer_arithmetic)]
-    fn are_others_valid(&self, instance: &Value, first_valid_idx: &String) -> bool {
+    fn are_others_valid(&self, instance: &Value, idx: usize) -> bool {
         // `idx + 1` will not overflow, because the maximum possible value there is `usize::MAX - 1`
         // For example we have `usize::MAX` schemas and only the last one is valid, then
         // in `get_first_valid` we enumerate from `0`, and on the last index will be `usize::MAX - 1`
-        for (idx, node) in &self.schemas {
-            if idx == first_valid_idx {
-                continue;
-            }
-            if node.is_valid(instance) {
-                return true;
-            }
-        }
-        false
+        self.schemas
+            .iter()
+            .skip(idx + 1)
+            .any(|n| n.is_valid(instance))
     }
 }
 
@@ -102,10 +114,8 @@ impl Validate for OneOfValidator {
         instance: &'instance Value,
         instance_path: &InstancePath,
     ) -> ErrorIterator<'instance> {
-        if let Some(discriminator_validation) =
-            self.get_discriminated_valid(instance, instance_path)
-        {
-            return discriminator_validation;
+        if let Some(discriminator) = &self.discriminator {
+            return discriminator.validate(instance, instance_path);
         }
         let first_valid_idx = self.get_first_valid(instance);
         if let Some(idx) = first_valid_idx {
@@ -132,7 +142,7 @@ impl Validate for OneOfValidator {
     ) -> PartialApplication<'a> {
         let mut failures = Vec::new();
         let mut successes = Vec::new();
-        for (_, node) in &self.schemas {
+        for node in &self.schemas {
             match node.apply_rooted(instance, instance_path) {
                 output @ BasicOutput::Valid(..) => successes.push(output),
                 output @ BasicOutput::Invalid(..) => failures.push(output),
@@ -156,7 +166,7 @@ impl core::fmt::Display for OneOfValidator {
         write!(
             f,
             "oneOf: [{}]",
-            format_iter_of_validators(self.schemas.values().map(SchemaNode::validators))
+            format_iter_of_validators(self.schemas.iter().map(SchemaNode::validators))
         )
     }
 }
