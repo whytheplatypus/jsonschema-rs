@@ -123,26 +123,6 @@ impl core::fmt::Display for RefValidator {
 }
 
 #[inline]
-pub(crate) fn compileTest<'a>(
-    schema: &'a Value,
-    context: &CompilationContext,
-) -> Option<CompilationResult<'a>> {
-    Some(
-        schema
-            .as_str()
-            .ok_or_else(|| {
-                ValidationError::single_type_error(
-                    JSONPointer::default(),
-                    context.clone().into_pointer(),
-                    schema,
-                    PrimitiveType::String,
-                )
-            })
-            .and_then(|reference| RefValidator::compile(reference, context)),
-    )
-}
-
-#[inline]
 pub(crate) fn compile<'a>(
     _: &'a Map<String, Value>,
     schema: &'a Value,

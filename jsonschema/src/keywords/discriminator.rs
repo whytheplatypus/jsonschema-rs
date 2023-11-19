@@ -1,9 +1,8 @@
 use crate::{
-    compilation::{compile_validators, context::CompilationContext},
-    error::{error, no_error, ErrorIterator, ValidationError},
+    compilation::context::CompilationContext,
+    error::{error, ErrorIterator, ValidationError},
     keywords::ref_,
     keywords::CompilationResult,
-    output::BasicOutput,
     paths::{InstancePath, JSONPointer},
     primitive_type::PrimitiveType,
     schema_node::SchemaNode,
@@ -11,7 +10,6 @@ use crate::{
 };
 use serde_json::{Map, Value};
 use std::collections::HashMap;
-use url::Url;
 
 pub(crate) struct DiscriminatorValidator {
     schema_path: JSONPointer,
@@ -25,8 +23,17 @@ fn compile_mapping<'a>(
 ) -> Result<SchemaNode, ValidationError<'a>> {
     match schema {
         Value::String(path) => {
-            let validator =
-                ref_::compileTest(&schema, &context).expect("should always return Some")?;
+            let validator = match ref_::compile(&Map::new(), &schema, &context) {
+                Some(Ok(validator)) => validator,
+                _ => {
+                    return Err(ValidationError::single_type_error(
+                        JSONPointer::default(),
+                        context.clone().into_pointer(),
+                        schema,
+                        PrimitiveType::String,
+                    ))
+                }
+            };
 
             let validators = vec![("$ref".to_string(), validator)];
             Ok(SchemaNode::new_from_keywords(&context, validators, None))

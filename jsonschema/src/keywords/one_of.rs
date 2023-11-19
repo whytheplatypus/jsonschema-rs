@@ -2,17 +2,14 @@ use crate::{
     compilation::{compile_validators, context::CompilationContext},
     error::{error, no_error, ErrorIterator, ValidationError},
     keywords::discriminator,
-    keywords::discriminator::DiscriminatorValidator,
     keywords::CompilationResult,
     output::BasicOutput,
     paths::{InstancePath, JSONPointer},
     primitive_type::PrimitiveType,
-    resolver::Resolver,
     schema_node::SchemaNode,
     validator::{format_iter_of_validators, PartialApplication, Validate},
 };
 use serde_json::{Map, Value};
-use std::collections::HashMap;
 use std::sync::Arc;
 use url::Url;
 
@@ -55,10 +52,10 @@ impl OneOfValidator {
                 }
             };
             // could be way more generic
-            let discriminator = if let Some(compilationResult) =
+            let discriminator = if let Some(compilation_result) =
                 discriminator::compile(&Map::new(), &discriminator_node, &context)
             {
-                match compilationResult {
+                match compilation_result {
                     Ok(d) => Some(d),
                     Err(e) => None,
                 }
