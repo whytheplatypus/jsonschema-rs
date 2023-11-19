@@ -34,7 +34,7 @@ impl OneOfValidator {
             for (idx, item) in items.iter().enumerate() {
                 let item_context = keyword_context.with_path(idx);
                 let node = compile_validators(item, &item_context)?;
-                schemas.push(node);
+                schemas.push(node)
             }
 
             let resolver = Arc::clone(&context.resolver);

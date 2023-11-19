@@ -320,7 +320,6 @@ impl CompilationOptions {
                 config.with_draft(draft);
             }
         }
-
         let config = Arc::new(config);
 
         let draft = config.draft();

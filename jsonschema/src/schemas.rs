@@ -1,5 +1,4 @@
 use crate::{compilation::context::CompilationContext, keywords};
-use ahash::AHashMap;
 use serde_json::{Map, Value};
 
 /// JSON Schema Draft version
