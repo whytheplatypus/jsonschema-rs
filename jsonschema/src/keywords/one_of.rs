@@ -1,6 +1,7 @@
 use crate::{
     compilation::{compile_validators, context::CompilationContext},
     error::{error, no_error, ErrorIterator, ValidationError},
+    keywords::discriminator,
     keywords::CompilationResult,
     output::BasicOutput,
     paths::{InstancePath, JSONPointer},
@@ -13,6 +14,7 @@ use serde_json::{Map, Value};
 pub(crate) struct OneOfValidator {
     schemas: Vec<SchemaNode>,
     schema_path: JSONPointer,
+    discriminator: Option<Box<dyn Validate + Send + Sync>>,
 }
 
 impl OneOfValidator {
@@ -29,9 +31,23 @@ impl OneOfValidator {
                 let node = compile_validators(item, &item_context)?;
                 schemas.push(node)
             }
+
+            // could be way more generic
+            let discriminator = if let Some(compilation_result) =
+                discriminator::compile(&Map::new(), &schema, &context)
+            {
+                match compilation_result {
+                    Ok(d) => Some(d),
+                    Err(e) => None,
+                }
+            } else {
+                None
+            };
+
             Ok(Box::new(OneOfValidator {
                 schemas,
                 schema_path: keyword_context.into_pointer(),
+                discriminator,
             }))
         } else {
             Err(ValidationError::single_type_error(
@@ -76,6 +92,9 @@ impl Validate for OneOfValidator {
         instance: &'instance Value,
         instance_path: &InstancePath,
     ) -> ErrorIterator<'instance> {
+        if let Some(discriminator) = &self.discriminator {
+            return discriminator.validate(instance, instance_path);
+        }
         let first_valid_idx = self.get_first_valid(instance);
         if let Some(idx) = first_valid_idx {
             if self.are_others_valid(instance, idx) {
